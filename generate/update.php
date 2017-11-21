@@ -51,10 +51,13 @@
 		foreach( $File as $Line )
 		{
 			++$Count;
-			
+
+			if(preg_match('/\#pragma/', $Line))
+				continue;
+
 			$IsCommentOpening = substr( $Line, 0, 2 ) === '/*';
-			$IsFunction = preg_match( '/^((stock|native|forward|public)\s+)+(\w+:(\[\d*\]))?\s*\w+\s*\(([^\)]*)\);?$/', $Line ) === 1;			
-			
+			$IsFunction = preg_match( '/^((stock|native|forward|public)\s+)+(\w+:(\[\d*\])?)?\s*\w+\s*\(([^\)]*)\);?$/', $Line ) === 1;
+
 			if( $FunctionUntilNextCommentBlock )
 			{
 				if( $IsFunction || $IsCommentOpening || $Count === $Lines )
@@ -66,7 +69,7 @@
 					if( substr( $Comment[ 0 ], 0, 11 ) === '@deprecated' )
 					{
 						$Comment[ 1 ] = $Comment[ 0 ] . "\n" . $Comment[ 1 ];
-						$Comment[ 0 ] = 'This function has no description.';
+						$Comment[ 0 ] = '';
 					}
 					
 					$Function = Array(
@@ -110,7 +113,7 @@
 			else if( !$IsCommentOpening && $IsFunction )
 			{
 				$Functions[ ] = Array(
-					'Comment' => 'This function has no description.',
+					'Comment' => '',
 					'CommentTags' => Array(),
 					'Function' => trim( $Line ),
 					'FunctionName' => GetFunctionName( $Line )
@@ -346,25 +349,7 @@
 	
 	function RemoveWhitespace( $Original, $Line )
 	{
-		if( strpos( $Line, "\n" ) !== false )
-		{
-			$Position = strpos( $Original, $Line );
-			
-			$Line = explode( "\n", $Line );
-			
-			foreach( $Line as &$Line2 )
-			{
-				// Remove whitespace
-				if( preg_match( '/^\s+$/', substr( $Line2, 0, $Position ) ) === 1 )
-				{
-					$Line2 = substr( $Line2, $Position );
-				}
-			}
-			
-			$Line = implode( "\n", $Line );
-		}
-		
-		return $Line;
+		return preg_replace('/\s+/', ' ', $Line);
 	}
 	
 	function GetFunctionName( $Line )
@@ -378,18 +363,18 @@
 		{
 				$PositionStart = strrpos($Line, $matches[0][0]) + strlen($matches[0][0]);
 		}
-		
+
 		if( $PositionStart === false )
 		{
 			$PositionStart = strrpos( $Line, ' ' );
 		}
-		
+
 		$FunctionName = substr( $Line, $PositionStart + 1 );
 		$FunctionType = substr( $Line, 0, strpos( $Line, ' ' ) );
 		
 		return Array(
-			trim( $FunctionName ),
-			trim( $FunctionType )
+			trim($FunctionName),
+			trim($FunctionType)
 		);
 	}
 	
@@ -419,19 +404,21 @@
 	 */
 	
 	require __DIR__ . '/../settings.php';
+
+	$StatementInsertFile = $Database->prepare('INSERT INTO `'.$Columns['Files'].'`(`IncludeName`, `Content`) VALUES (?, ?)');
 	
-	$StatementInsertFile = $Database->prepare( 'INSERT INTO `' . $Columns[ 'Files' ] . '` (`IncludeName`, `Content`) VALUES (?, ?) '
-	                                         . 'ON DUPLICATE KEY UPDATE `Content` = ?' );
+	$StatementInsertFunction = $Database->prepare('INSERT INTO `'.$Columns['Functions'].'`(`Function`, `FullFunction`, `Type`, `Comment`, `Tags`, `IncludeName`) VALUES (?, ?, ?, ?, ?, ?)');
 	
-	$StatementInsertFunction = $Database->prepare( 'INSERT INTO `' . $Columns[ 'Functions' ] . '` (`Function`, `FullFunction`, `Type`, `Comment`, `Tags`, `IncludeName`) VALUES (?, ?, ?, ?, ?, ?) '
-	                                             . 'ON DUPLICATE KEY UPDATE `FullFunction` = ?, `Type` = ?, `Comment` = ?, `Tags` = ?, `IncludeName` = ?' );
-	
-	$StatementInsertConstant = $Database->prepare( 'INSERT INTO `' . $Columns[ 'Constants' ] . '` (`Constant`, `Comment`, `Tags`, `IncludeName`) VALUES (?, ?, ?, ?)' );
+	$StatementInsertConstant = $Database->prepare('INSERT INTO `'.$Columns['Constants'].'`(`Constant`, `Comment`, `Tags`, `IncludeName`) VALUES (?, ?, ?, ?)');
 	
 	try
 	{
 		$Database->beginTransaction();
 		
+		$Database->query( 'TRUNCATE TABLE `' . $Columns[ 'Files' ] . '`' );
+		$Database->query( 'TRUNCATE TABLE `' . $Columns[ 'Constants' ] . '`' );
+		$Database->query( 'TRUNCATE TABLE `' . $Columns[ 'Functions' ] . '`' );
+
 		foreach( $BigListOfFunctions as $IncludeName => $Functions )
 		{
 			$File = file_get_contents( $FilesList[ $IncludeName ] );
@@ -439,7 +426,6 @@
 			$StatementInsertFile->execute(
 				Array(
 					$IncludeName,
-					$File,
 					$File
 				)
 			);
@@ -455,12 +441,6 @@
 						$Function[ 'FunctionName' ][ 1 ],
 						$Function[ 'Comment' ],
 						$Tags, 
-						$IncludeName,
-						
-						$Function[ 'Function' ],
-						$Function[ 'FunctionName' ][ 1 ],
-						$Function[ 'Comment' ],
-						$Tags,
 						$IncludeName
 					)	
 				);
@@ -469,9 +449,6 @@
 		
 		$Database->commit();
 		$Database->beginTransaction();
-		
-		// Not really nice way of doing things
-		$Database->query( 'TRUNCATE TABLE `' . $Columns[ 'Constants' ] . '`' );
 		
 		foreach( $BigListOfConstants as $IncludeName => $Functions )
 		{
